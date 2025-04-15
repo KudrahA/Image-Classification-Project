@@ -1,4 +1,4 @@
-## Math3333---Image-Classification-Using-Machine-Learning-Models
+## Math3333---Image-Classification-Project
 
 This project is part of the final coursework for MATH 3333 at York University. It involves using various machine learning models to classify images from the Columbia Image dataset as either "outdoor-day" or "not outdoor-day" based on grid-based pixel intensity features.
 
