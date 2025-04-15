@@ -1,6 +1,6 @@
 ---
 title: "Project"
-author: "Someone"
+author: "Kudrah Asamu"
 date: "2025-04-15"
 output: pdf_document
 ---
