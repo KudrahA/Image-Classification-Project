@@ -1,0 +1,454 @@
+---
+title: "Project"
+author: "Someone"
+date: "2025-04-15"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+###Extracting features using grid partitioning
+
+
+##Loading necessary libraries
+
+library(jpeg)
+
+
+
+##Defining Grid Feature Extraction Function
+
+get_grid_features <- function(img,grid_size=10) {
+  #Get image dimensions
+  h <- dim(img)[1]
+  w <- dim(img)[2]
+  c <- dim(img)[3]
+  
+  #Size of each grid cell
+  h_step <- floor(h / grid_size)
+  w_step <- floor(w / grid_size)
+  
+  features <- c()
+  for (i in 0:(grid_size - 1)){
+    for (j in 0:(grid_size - 1)){
+      for (k in 1:c) {
+        patch <- img[(i * h_step + 1):min((i + 1) * h_step,h),
+                     (j * w_step + 1):min((j + 1) * w_step, w), k]
+        features <- c(features, median(patch))
+      }
+    }
+  }
+  return(features)
+}
+```
+
+
+
+```{r}
+##Apply to all images
+photometadata <- read.csv("D:\\MATH 3333\\Winter 25\\Final Project\\photoMetaData.csv")
+n <- nrow(photometadata)
+grid_size <- 10
+X_grid <- matrix (NA, nrow = n, ncol = grid_size * grid_size * 3)
+
+for (j in 1:n) {
+  img <- readJPEG(paste0("D:\\MATH 3333\\Winter 25\\Final Project\\columbiaImages\\columbiaImages\\", photometadata$name[j]))
+  X_grid[j,] <- get_grid_features(img, grid_size)
+  print(sprintf("%03d / %03d", j, n))
+}
+
+```
+
+
+
+```{r}
+##Using Random Forest
+
+#Label and Split 
+y <- as.numeric(photometadata$category == "outdoor-day")
+set.seed(42)
+trainFlag <- runif(length(y)) > 0.5
+
+#Train a Random Forest
+library(randomForest)
+
+rf_model <- randomForest(x = X_grid[trainFlag, ],
+                         y = as.factor(y[trainFlag]),
+                         ntree = 200)
+
+rf_model
+```
+
+
+
+```{r}
+
+##Predict and Evaluate
+
+rf_pred_probs <- predict(rf_model, X_grid[!trainFlag, ], type = "prob")[,2]
+rf_pred_class <- as.numeric(rf_pred_probs > 0.5)
+y_test <- y[!trainFlag]
+
+#Accuracy
+rf_acc <- mean(rf_pred_class == y_test)
+
+#Misclassification Error
+rf_misc <- 1 - rf_acc
+
+#Sensitivity (True Positive Rate)
+rf_sens <- sum(rf_pred_class == 1 & y_test == 1) / sum(y_test == 1)
+
+#Specificity (True Negative Rate)
+rf_spec <- sum(rf_pred_class == 0 & y_test == 0) / sum(y_test == 0)
+
+rf_acc
+rf_misc
+rf_sens
+rf_spec
+```
+
+
+
+```{r}
+thresholds  <- seq(0.1,0.9, by = 0.05)
+
+accuracy <- c()
+misclassification <- c()
+sensitivity <- c()
+specificity <- c()
+
+for (t in thresholds) {
+  preds <- as.numeric(rf_pred_probs > t)
+  
+  acc <- mean(preds == y_test)
+  misc <- 1 - acc
+  sens <- sum(preds == 1 & y_test == 1) / sum(y_test == 1)
+  spec <- sum(preds == 0 & y_test == 0) / sum(y_test == 0)
+  
+  accuracy <- c(accuracy, acc)
+  misclassification <- c(misclassification, misc)
+  sensitivity <- c(sensitivity, sens)
+  specificity <- c(specificity, spec)
+}
+
+#Base plot
+plot(thresholds, misclassification, type="l", col="lightblue", lwd=2, ylim=c(0,1), 
+     xlab="Probability Threshold", ylab="Measure", 
+     main="Random Forest Model Performance vs Probability Threshold")
+lines(thresholds, sensitivity, col="lightgreen", lwd=2)
+lines(thresholds, specificity, col="pink", lwd=2)
+
+legend("bottomleft", legend=c("Misclassification", "Sensitivity", "Specificity"), 
+       col=c("lightblue", "lightgreen", "pink"), lwd=1)
+```
+
+
+
+```{r}
+
+#Finding where misclassification is lowest for Random Forest
+
+rf_best_index <- which.min(misclassification)
+
+rf_best_threshold <- thresholds[rf_best_index]
+rf_best_misclassification <- misclassification[rf_best_index]
+rf_best_sensitivity <- sensitivity[rf_best_index]
+rf_best_specificity <- specificity[rf_best_index]
+
+
+cat("Best Probability Threshold:", rf_best_threshold, "\n")
+
+cat("Misclassification at best probability threshold is", rf_best_misclassification, "\n")
+cat("Sensitivity at best probability threshold is", rf_best_sensitivity, "\n")
+cat("Specificity at best probability threshold is", rf_best_specificity, "\n")
+```
+
+```{r}
+get_roc_data <- function(y_true, probs) {
+  thresholds <- seq(0, 1, by = 0.01)
+  tpr <- c()  # Sensitivity
+  fpr <- c()  # 1 - Specificity
+  
+  for (t in thresholds) {
+    pred_class <- as.numeric(probs >= t)
+    
+    tp <- sum(pred_class == 1 & y_true == 1)
+    fn <- sum(pred_class == 0 & y_true == 1)
+    fp <- sum(pred_class == 1 & y_true == 0)
+    tn <- sum(pred_class == 0 & y_true == 0)
+    
+    tpr <- c(tpr, tp / (tp + fn))
+    fpr <- c(fpr, fp / (fp + tn))
+  }
+  
+  return(list(fpr = fpr, tpr = tpr))
+}
+```
+
+
+
+```{r}
+rf_roc <- get_roc_data(y_test, rf_pred_probs)
+
+# Plot ROC Curve
+plot(rf_roc$fpr, rf_roc$tpr, type = "l", col = "blue", lwd = 2,
+     xlab = "False Positive Rate", ylab = "True Positive Rate", 
+     main = "ROC Curve - Random Forest Model")
+abline(0, 1, lty = 2, col = "black") 
+```
+
+
+```{r}
+get_auc <- function(fpr, tpr) {
+  # Order by increasing FPR
+  ord <- order(fpr)
+  fpr <- fpr[ord]
+  tpr <- tpr[ord]
+  
+  auc <- sum(diff(fpr) * (tpr[-1] + tpr[-length(tpr)]) / 2)  #Trapezoid method
+  return(auc)
+}
+
+rf_auc <- get_auc(rf_roc$fpr, rf_roc$tpr)
+
+cat("AUC for Random Forest Model:", round(rf_auc, 4), "\n")
+
+```
+
+
+```{r}
+library(MASS)
+
+#Train LDA model
+lda_model <- lda(X_grid[trainFlag, ], grouping = as.factor(y[trainFlag]))
+
+#Predict on test set
+lda_pred <- predict(lda_model, X_grid[!trainFlag, ])
+lda_probs <- lda_pred$posterior[,2]
+
+#Using Threshold to get predicted classes
+lda_class <- as.numeric(lda_probs > 0.5)
+y_test <- y[!trainFlag]
+
+#Evaluate the performance of the model
+
+#Accuracy
+lda_acc <- mean(lda_class == y_test)
+#Misclassification
+lda_misc <- 1 - lda_acc
+#Sensitivity
+lda_sens <- sum(lda_class == 1 & y_test == 1) / sum(y_test == 1)
+#Specificity
+lda_spec <- sum(lda_class == 0 & y_test == 0) / sum(y_test == 0)
+
+cat("LDA Misclassification:", lda_misc,"\n")
+cat("LDA Sensitivity:", lda_sens,"\n")
+cat("LDA Specificity:", lda_spec,"\n")
+
+```
+
+
+
+```{r}
+
+thresholds  <- seq(0.1,0.9, by = 0.05)
+
+lda_accuracy <- c()
+lda_misclassification <- c()
+lda_sensitivity <- c()
+lda_specificity <- c()
+
+for (t in thresholds) {
+  lda_preds <- as.numeric(lda_probs > t)
+  
+  acc <- mean(lda_preds == y_test)
+  misc <- 1 - acc
+  sens <- sum(lda_preds == 1 & y_test == 1) / sum(y_test == 1)
+  spec <- sum(lda_preds == 0 & y_test == 0) / sum(y_test == 0)
+  
+  lda_accuracy <- c(lda_accuracy, acc)
+  lda_misclassification <- c(lda_misclassification, misc)
+  lda_sensitivity <- c(lda_sensitivity, sens)
+  lda_specificity <- c(lda_specificity, spec)
+}
+
+#Base plot
+plot(thresholds, lda_misclassification, type="l", col="lightblue", lwd=2, ylim=c(0,1), xlab="Probability Threshold", ylab="Measure", 
+     main="LDA Model Performance vs Probability Threshold")
+lines(thresholds, lda_sensitivity, col="lightgreen", lwd=2)
+lines(thresholds, lda_specificity, col="pink", lwd=2)
+
+legend("bottomleft", legend=c("Misclassification", "Sensitivity", "Specificity"), 
+       col=c("lightblue", "lightgreen", "pink"), lwd=1)
+
+```
+
+```{r}
+
+#Finding where misclassification is lowest for LDA
+
+lda_best_index <- which.min(lda_misclassification)
+
+lda_best_threshold <- thresholds[lda_best_index]
+lda_best_misclassification <- lda_misclassification[lda_best_index]
+lda_best_sensitivity <- lda_sensitivity[lda_best_index]
+lda_best_specificity <- lda_specificity[lda_best_index]
+
+
+cat("Best Probability Threshold:", lda_best_threshold, "\n")
+
+cat("Misclassification at best probability threshold is", lda_best_misclassification, "\n")
+cat("Sensitivity at best probability threshold is", lda_best_sensitivity, "\n")
+cat("Specificity at best probability threshold is", lda_best_specificity, "\n")
+
+
+```
+```{r}
+lda_roc <- get_roc_data(y_test, lda_probs)
+
+# Plot ROC Curve for LDA
+plot(lda_roc$fpr, lda_roc$tpr, type = "l", col = "darkorange", lwd = 2,
+     xlab = "False Positive Rate", ylab = "True Positive Rate", 
+     main = "ROC Curve - LDA Model")
+abline(0, 1, lty = 2, col = "black")  
+```
+
+```{r}
+#AUC
+
+lda_auc <- get_auc(lda_roc$fpr, lda_roc$tpr)
+cat("AUC for LDA Model:", round(lda_auc, 4), "\n")
+```
+
+```{r}
+##KNN Model 
+
+library(class)
+
+#Create test and train data
+X_train <- X_grid[trainFlag, ]
+X_test <- X_grid[!trainFlag, ]
+y_train <- as.factor(y[trainFlag])
+y_test <- y[!trainFlag]
+
+#Run K-nearest neighbor, starting with k=5
+knn_pred <- knn(train = X_train, test = X_test, cl = y_train, k = 5, prob = TRUE)
+
+#Convert predictions to numeric 
+knn_class <- as.numeric(as.character(knn_pred))
+
+#Accuracy
+knn_acc <- mean(knn_class == y_test)
+
+#Misclassification
+knn_misc <- 1 - knn_acc
+
+# Sensitivity
+knn_sens <- sum(knn_class == 1 & y_test == 1) / sum(y_test == 1)
+
+# Specificity
+knn_spec <- sum(knn_class == 0 & y_test == 0) / sum(y_test == 0)
+
+# Print
+cat("KNN (k=5) Misclassification:", knn_misc, "\n")
+cat("Sensitivity:", knn_sens, "\n")
+cat("Specificity:", knn_spec, "\n")
+```
+
+```{r}
+
+k_vals <- seq(1, 25, by=2)
+acc_vec <- c()
+misc_vec <- c()
+sens_vec <- c()
+spec_vec <- c()
+
+for (k in k_vals) {
+  pred <- knn(train = X_train, test = X_test, cl = y_train, k = k)
+  pred_num <- as.numeric(as.character(pred))
+
+  acc <- mean(pred_num == y_test)
+  misc <- 1 - acc
+  sens <- sum(pred_num == 1 & y_test == 1) / sum(y_test == 1)
+  spec <- sum(pred_num == 0 & y_test == 0) / sum(y_test == 0)
+
+  acc_vec <- c(acc_vec, acc)
+  misc_vec <- c(misc_vec, misc)
+  sens_vec <- c(sens_vec, sens)
+  spec_vec <- c(spec_vec, spec)
+}
+
+# Plot
+plot(k_vals, misc_vec, type="l", col="lightblue", ylim=c(0,1), lwd=2,
+     xlab="k (Number of Neighbors)", ylab="Measure", 
+     main="K-nearest Neighbor Performance by k values")
+lines(k_vals, sens_vec, col="lightgreen", lwd=2)
+lines(k_vals, spec_vec, col="pink", lwd=2)
+legend("bottomright", legend=c("Misclassification", "Sensitivity", "Specificity"),
+       col=c("lightblue", "lightgreen", "pink"), lwd=2)
+```
+
+
+
+```{r}
+knn_best_index <- which.min(misc_vec)
+
+best_kvalue <- k_vals[knn_best_index]
+knn_best_misclassification <- misc_vec[knn_best_index]
+knn_best_sensitivity <- sens_vec[knn_best_index]
+knn_best_specificity <- spec_vec[knn_best_index]
+
+
+cat("Best Performing K value:", best_kvalue, "\n")
+
+cat("Misclassification at best K value is", knn_best_misclassification, "\n")
+cat("Sensitivity at best K value is", knn_best_sensitivity, "\n")
+cat("Specificity at best K value is", knn_best_specificity, "\n")
+```
+
+
+
+```{r}
+knn_pred <- knn(train = X_train, test = X_test, cl = y_train, k = best_kvalue, prob = TRUE)
+
+# Get vote proportions
+knn_vote_probs <- attr(knn_pred, "prob")
+
+# Predicted class labels (as numeric)
+knn_class <- as.numeric(as.character(knn_pred))
+
+# Convert to class-1 probability (outdoor-day)
+# If predicted class is 1, use prob directly; otherwise, use 1 - prob
+knn_probs <- ifelse(knn_class == 1, knn_vote_probs, 1 - knn_vote_probs)
+```
+
+
+
+```{r}
+knn_roc <- get_roc_data(y_test, knn_probs)
+
+# Plot ROC
+plot(knn_roc$fpr, knn_roc$tpr, type = "l", col = "purple", lwd = 2,
+     xlab = "False Positive Rate", ylab = "True Positive Rate",
+     main = "ROC Curve - KNN Model (k = 19)")
+abline(0, 1, lty = 2, col = "black")
+```
+
+
+```{r}
+knn_auc <- get_auc(knn_roc$fpr, knn_roc$tpr)
+cat("AUC for KNN Model (k = 19):", round(knn_auc, 4), "\n")
+```
+
+
+```{r}
+
+```
+
+
+
